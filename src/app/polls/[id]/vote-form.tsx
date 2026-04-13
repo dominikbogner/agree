@@ -1,85 +1,303 @@
 "use client"
+
 import { useState } from "react"
 
 type VoteType = "YES" | "IF_NEED_BE" | "NO"
-interface Option { id: string; label: string }
-interface Vote { optionId: string; voterName: string; type: VoteType }
-interface Poll { id: string; closedAt: string | null; options: Option[]; votes: Vote[] }
 
-export default function VoteForm({ poll }: { poll: Poll }) {
+interface Option {
+  id: string
+  label: string
+  type: "TEXT" | "DATE" | "DATE_RANGE"
+}
+
+interface Vote {
+  optionId: string
+  voterName: string
+  type: VoteType
+  timeFrom: string | null
+  timeTo: string | null
+}
+
+interface Poll {
+  id: string
+  closedAt: string | null
+  allowParticipantTime: boolean
+  options: Option[]
+  votes: Vote[]
+}
+
+export default function VoteForm({
+  poll,
+  canShare,
+}: {
+  poll: Poll
+  canShare: boolean
+}) {
   const [name, setName] = useState("")
-  const [votes, setVotes] = useState<Record<string, VoteType>>({})
+  const [votesByOption, setVotesByOption] = useState<Record<string, VoteType>>({})
+  const [timesByOption, setTimesByOption] = useState<
+    Record<string, { timeFrom: string; timeTo: string }>
+  >({})
   const [allVotes, setAllVotes] = useState<Vote[]>(poll.votes)
   const [submitted, setSubmitted] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
+  const [copied, setCopied] = useState(false)
 
-  const getVoters = (optionId: string, type: VoteType) =>
-    allVotes.filter(v => v.optionId === optionId && v.type === type).map(v => v.voterName)
-
-  const allVoters = [...new Set(allVotes.map(v => v.voterName))]
   const isClosed = !!poll.closedAt
 
-  const handleSubmit = async () => {
-    if (!name.trim()) { setError("Bitte deinen Namen eingeben"); return }
-    if (Object.keys(votes).length < poll.options.length) { setError("Bitte für alle Optionen abstimmen"); return }
-    setLoading(true); setError("")
+  function updateVote(optionId: string, type: VoteType) {
+    setVotesByOption((current) => ({
+      ...current,
+      [optionId]: type,
+    }))
+
+    if (type === "NO") {
+      setTimesByOption((current) => ({
+        ...current,
+        [optionId]: {
+          timeFrom: "",
+          timeTo: "",
+        },
+      }))
+    }
+  }
+
+  function updateTime(optionId: string, updates: Partial<{ timeFrom: string; timeTo: string }>) {
+    setTimesByOption((current) => ({
+      ...current,
+      [optionId]: {
+        timeFrom: current[optionId]?.timeFrom ?? "",
+        timeTo: current[optionId]?.timeTo ?? "",
+        ...updates,
+      },
+    }))
+  }
+
+  function getVotes(optionId: string, type: VoteType) {
+    return allVotes.filter((vote) => vote.optionId === optionId && vote.type === type)
+  }
+
+  function formatVoteLabel(vote: Vote) {
+    if (vote.timeFrom && vote.timeTo) {
+      return `${vote.voterName} (${vote.timeFrom}–${vote.timeTo})`
+    }
+
+    if (vote.timeFrom) {
+      return `${vote.voterName} (ab ${vote.timeFrom})`
+    }
+
+    if (vote.timeTo) {
+      return `${vote.voterName} (bis ${vote.timeTo})`
+    }
+
+    return vote.voterName
+  }
+
+  async function copyLink() {
+    await navigator.clipboard.writeText(window.location.href)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1800)
+  }
+
+  async function handleSubmit() {
+    if (!name.trim()) {
+      setError("Bitte deinen Namen eingeben")
+      return
+    }
+
+    if (Object.keys(votesByOption).length < poll.options.length) {
+      setError("Bitte für alle Optionen abstimmen")
+      return
+    }
+
+    setLoading(true)
+    setError("")
+
     try {
       const res = await fetch(`/api/polls/${poll.id}/votes`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ voterName: name.trim(), votes: Object.entries(votes).map(([optionId, type]) => ({ optionId, type })) }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          voterName: name.trim(),
+          votes: Object.entries(votesByOption).map(([optionId, type]) => ({
+            optionId,
+            type,
+            timeFrom: timesByOption[optionId]?.timeFrom || null,
+            timeTo: timesByOption[optionId]?.timeTo || null,
+          })),
+        }),
       })
-      if (!res.ok) throw new Error("Fehler beim Speichern")
+
       const data = await res.json()
+
+      if (!res.ok) {
+        throw new Error(data.error || "Fehler beim Speichern")
+      }
+
       setAllVotes(data.votes)
       setSubmitted(true)
-    } catch (e: any) {
-      setError(e.message)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Fehler beim Speichern")
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       {!isClosed && !submitted && (
-        <div className="bg-white rounded-2xl border border-gray-100 p-4">
-          <label className="block text-sm font-medium text-gray-700 mb-2">Dein Name</label>
-          <input value={name} onChange={e => setName(e.target.value)} placeholder="Max Mustermann"
-            className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent" />
+        <div className="rounded-2xl border border-gray-100 bg-white p-6">
+          <label className="mb-1 block text-sm font-medium text-gray-700">Dein Name</label>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Max Mustermann"
+            className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-gray-900 outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-500"
+          />
         </div>
       )}
 
-      <div className="space-y-3">
-        {poll.options.map(option => {
-          const yes = getVoters(option.id, "YES")
-          const maybe = getVoters(option.id, "IF_NEED_BE")
-          const no = getVoters(option.id, "NO")
-          const sel = votes[option.id]
+      {submitted && (
+        <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-6">
+          <div className="text-lg font-semibold text-emerald-800">Deine Abstimmung wurde gespeichert.</div>
+          <div className="mt-3 flex flex-wrap gap-3">
+            <button
+              onClick={() => setSubmitted(false)}
+              className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-700 hover:bg-emerald-100"
+            >
+              Abstimmung bearbeiten
+            </button>
+
+            {canShare && (
+              <button
+                onClick={copyLink}
+                className="rounded-xl bg-violet-600 px-3 py-2 text-sm font-medium text-white hover:bg-violet-700"
+              >
+                {copied ? "Link kopiert" : "Link kopieren"}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="space-y-4">
+        {poll.options.map((option) => {
+          const yesVotes = getVotes(option.id, "YES")
+          const maybeVotes = getVotes(option.id, "IF_NEED_BE")
+          const noVotes = getVotes(option.id, "NO")
+          const selectedType = votesByOption[option.id]
+          const showTimeInputs =
+            poll.allowParticipantTime &&
+            option.type === "DATE" &&
+            !!selectedType &&
+            selectedType !== "NO" &&
+            !isClosed &&
+            !submitted
+
           return (
-            <div key={option.id} className="bg-white rounded-2xl border border-gray-100 p-4">
-              <p className="font-medium text-gray-900 mb-3">{option.label}</p>
-              {!isClosed && !submitted && (
-                <div className="grid grid-cols-3 gap-2 mb-3">
-                  {([
-                    { type: "YES" as VoteType, label: "✓ Ja", active: "bg-green-500 text-white", idle: "bg-green-50 text-green-700 hover:bg-green-100" },
-                    { type: "IF_NEED_BE" as VoteType, label: "~ OK", active: "bg-amber-500 text-white", idle: "bg-amber-50 text-amber-700 hover:bg-amber-100" },
-                    { type: "NO" as VoteType, label: "✗ Nein", active: "bg-red-400 text-white", idle: "bg-red-50 text-red-600 hover:bg-red-100" },
-                  ]).map(btn => (
-                    <button key={btn.type} onClick={() => setVotes(v => ({ ...v, [option.id]: btn.type }))}
-                      className={`py-2.5 rounded-xl text-sm font-medium transition-colors ${sel === btn.type ? btn.active : btn.idle}`}>
-                      {btn.label}
-                    </button>
-                  ))}
+            <div key={option.id} className="rounded-2xl border border-gray-100 bg-white p-6">
+              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900">{option.label}</h3>
+                  <p className="mt-1 text-xs uppercase tracking-wide text-gray-400">
+                    {option.type === "TEXT"
+                      ? "Text"
+                      : option.type === "DATE"
+                        ? "Tag"
+                        : "Zeitraum"}
+                  </p>
+                </div>
+
+                {!isClosed && !submitted && (
+                  <div className="grid grid-cols-3 gap-2">
+                    {[
+                      {
+                        type: "YES" as VoteType,
+                        label: "✓ Ja",
+                        active: "bg-green-500 text-white",
+                        idle: "bg-green-50 text-green-700 hover:bg-green-100",
+                      },
+                      {
+                        type: "IF_NEED_BE" as VoteType,
+                        label: "~ OK",
+                        active: "bg-amber-500 text-white",
+                        idle: "bg-amber-50 text-amber-700 hover:bg-amber-100",
+                      },
+                      {
+                        type: "NO" as VoteType,
+                        label: "✗ Nein",
+                        active: "bg-red-500 text-white",
+                        idle: "bg-red-50 text-red-700 hover:bg-red-100",
+                      },
+                    ].map((button) => (
+                      <button
+                        key={button.type}
+                        onClick={() => updateVote(option.id, button.type)}
+                        className={`rounded-xl px-3 py-2 text-sm font-medium transition ${
+                          selectedType === button.type ? button.active : button.idle
+                        }`}
+                      >
+                        {button.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {showTimeInputs && (
+                <div className="mb-4 grid gap-3 md:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">
+                      Von (optional)
+                    </label>
+                    <input
+                      type="time"
+                      value={timesByOption[option.id]?.timeFrom ?? ""}
+                      onChange={(e) => updateTime(option.id, { timeFrom: e.target.value })}
+                      className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-gray-900 outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">
+                      Bis (optional)
+                    </label>
+                    <input
+                      type="time"
+                      value={timesByOption[option.id]?.timeTo ?? ""}
+                      onChange={(e) => updateTime(option.id, { timeTo: e.target.value })}
+                      className="w-full rounded-xl border border-gray-200 px-3 py-2.5 text-gray-900 outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-500"
+                    />
+                  </div>
                 </div>
               )}
-              <div className="space-y-1">
-                {yes.length > 0 && <div className="flex gap-2 text-sm"><span className="text-green-500 shrink-0">✓</span><span className="text-gray-600">{yes.join(", ")}</span></div>}
-                {maybe.length > 0 && <div className="flex gap-2 text-sm"><span className="text-amber-500 shrink-0">~</span><span className="text-gray-600">{maybe.join(", ")}</span></div>}
-                {no.length > 0 && <div className="flex gap-2 text-sm"><span className="text-red-400 shrink-0">✗</span><span className="text-gray-600">{no.join(", ")}</span></div>}
-                {yes.length === 0 && maybe.length === 0 && no.length === 0 && (
-                  <p className="text-xs text-gray-300">Noch keine Stimmen</p>
+
+              <div className="space-y-2 text-sm">
+                {yesVotes.length > 0 && (
+                  <p className="text-green-700">
+                    <span className="font-medium">✓ Ja:</span>{" "}
+                    {yesVotes.map(formatVoteLabel).join(", ")}
+                  </p>
+                )}
+
+                {maybeVotes.length > 0 && (
+                  <p className="text-amber-700">
+                    <span className="font-medium">~ OK:</span>{" "}
+                    {maybeVotes.map(formatVoteLabel).join(", ")}
+                  </p>
+                )}
+
+                {noVotes.length > 0 && (
+                  <p className="text-red-700">
+                    <span className="font-medium">✗ Nein:</span>{" "}
+                    {noVotes.map(formatVoteLabel).join(", ")}
+                  </p>
+                )}
+
+                {yesVotes.length === 0 && maybeVotes.length === 0 && noVotes.length === 0 && (
+                  <p className="text-gray-400">Noch keine Stimmen</p>
                 )}
               </div>
             </div>
@@ -88,27 +306,22 @@ export default function VoteForm({ poll }: { poll: Poll }) {
       </div>
 
       {!isClosed && !submitted && (
-        <div className="space-y-3">
-          {error && <p className="text-sm text-red-500 bg-red-50 px-4 py-3 rounded-xl">{error}</p>}
-          <button onClick={handleSubmit} disabled={loading}
-            className="w-full bg-violet-600 hover:bg-violet-700 disabled:bg-violet-300 text-white font-medium py-3.5 rounded-xl transition-colors text-lg">
-            {loading ? "Speichere..." : "Abstimmen"}
-          </button>
-        </div>
-      )}
-
-      {submitted && (
-        <div className="bg-green-50 border border-green-100 rounded-2xl p-4 text-center">
-          <p className="text-green-700 font-medium">✓ Deine Stimme wurde gespeichert!</p>
-          <p className="text-sm text-green-600 mt-1">{allVoters.length} Person{allVoters.length !== 1 ? "en" : ""} {allVoters.length !== 1 ? "haben" : "hat"} abgestimmt</p>
-        </div>
+        <button
+          onClick={handleSubmit}
+          disabled={loading}
+          className="w-full rounded-2xl bg-violet-600 px-4 py-3.5 text-lg font-medium text-white transition hover:bg-violet-700 disabled:bg-violet-300"
+        >
+          {loading ? "Speichere…" : "Abstimmung speichern"}
+        </button>
       )}
 
       {isClosed && (
-        <div className="bg-gray-50 border border-gray-100 rounded-2xl p-4 text-center">
-          <p className="text-gray-500">Diese Umfrage ist geschlossen.</p>
+        <div className="rounded-2xl border border-red-100 bg-red-50 p-4 text-sm text-red-700">
+          Diese Umfrage ist geschlossen.
         </div>
       )}
+
+      {error && <div className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-600">{error}</div>}
     </div>
   )
 }
