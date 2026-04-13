@@ -7,7 +7,16 @@ export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(prisma) as any,
   providers: [
     EmailProvider({
-      server: process.env.EMAIL_SERVER,
+      // Wir nutzen generische Standard-Variablen, damit das Projekt 
+      // von jedem problemlos in jeder Umgebung deployed werden kann.
+      server: {
+        host: process.env.SMTP_HOST,
+        port: Number(process.env.SMTP_PORT),
+        auth: {
+          user: process.env.SMTP_USER,
+          pass: process.env.SMTP_PASSWORD,
+        },
+      },
       from: process.env.EMAIL_FROM,
     }),
   ],
